@@ -8,6 +8,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"time"
 
@@ -72,9 +73,14 @@ func ageDays(env *Env, info fs.FileInfo) *int {
 	return cred.Days(int(d / (24 * time.Hour)))
 }
 
+// unixPermsMeaningful reports whether a file's permission bits carry
+// information on this OS. Windows reports 0666 for every file, so the Unix
+// "group/other can read this" checks are meaningless and must be skipped there.
+func unixPermsMeaningful() bool { return runtime.GOOS != "windows" }
+
 // worldReadable reports whether others can read the file (Unix modes only).
 func worldReadable(info fs.FileInfo) bool {
-	return info != nil && info.Mode().Perm()&0o044 != 0
+	return info != nil && unixPermsMeaningful() && info.Mode().Perm()&0o044 != 0
 }
 
 // section is one INI [section] with its key/value pairs in order.

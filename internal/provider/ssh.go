@@ -130,7 +130,7 @@ func (ssh) Collect(env *Env) ([]cred.Credential, []Problem) {
 			sort.Strings(usedBy)
 			c.Notes = append(c.Notes, "used for hosts: "+strings.Join(dedupeStrings(usedBy), ", "))
 		}
-		if info.Mode().Perm()&0o077 != 0 {
+		if unixPermsMeaningful() && info.Mode().Perm()&0o077 != 0 {
 			c.Notes = append(c.Notes, fmt.Sprintf("permissions %04o: readable by other users", info.Mode().Perm()))
 		}
 		out = append(out, c)

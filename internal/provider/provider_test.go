@@ -1,6 +1,7 @@
 package provider
 
 import (
+	"runtime"
 	"strings"
 	"testing"
 
@@ -255,8 +256,13 @@ func TestSSH(t *testing.T) {
 	if enc == nil || !enc.Protected || enc.Severity != cred.Low || !strings.Contains(enc.Summary, "ssh-rsa") || !strings.Contains(strings.Join(enc.Notes, "|"), "github.com") {
 		t.Errorf("enc = %+v", enc)
 	}
-	if pemk := find(cs, func(c cred.Credential) bool { return strings.HasSuffix(c.Location, "legacy.pem") }); pemk == nil || !pemk.Protected || !strings.Contains(strings.Join(pemk.Notes, "|"), "0644") {
+	pemk := find(cs, func(c cred.Credential) bool { return strings.HasSuffix(c.Location, "legacy.pem") })
+	if pemk == nil || !pemk.Protected {
 		t.Errorf("pem = %+v", pemk)
+	} else if runtime.GOOS != "windows" && !strings.Contains(strings.Join(pemk.Notes, "|"), "0644") {
+		// Unix file modes are meaningless on Windows (every file reads 0666),
+		// so the permissions note is only asserted off Windows.
+		t.Errorf("pem perms note = %+v", pemk)
 	}
 	if dk := find(cs, func(c cred.Credential) bool { return strings.HasSuffix(c.Location, "deploy_key") }); dk == nil || dk.Protected || !strings.Contains(strings.Join(dk.Notes, "|"), "bastion") {
 		t.Errorf("deploy key = %+v", dk)
