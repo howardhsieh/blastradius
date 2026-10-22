@@ -1,13 +1,22 @@
 # blastradius
 
+[![CI](https://github.com/howardhsieh/blastradius/actions/workflows/ci.yml/badge.svg)](https://github.com/howardhsieh/blastradius/actions/workflows/ci.yml)
+[![Go](https://img.shields.io/badge/Go-1.22+-00ADD8?logo=go&logoColor=white)](go.mod)
+[![dependencies](https://img.shields.io/badge/dependencies-0-44cc11)](go.mod)
+[![network](https://img.shields.io/badge/network-never-44cc11)](#privacy-rules)
+[![secrets](https://img.shields.io/badge/secrets%20printed-never-44cc11)](#privacy-rules)
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
+
 **If a credential stealer ran on your laptop today, what would it walk away with?**
+
+![blastradius scanning a workstation and rating its exposure CRITICAL](docs/demo.gif)
 
 `blastradius` is an offline inventory of the credentials sitting on a developer
 workstation: GitHub and npm tokens, cloud keys, kubeconfigs, SSH keys, AI-provider
 API keys, `.env` files, secrets typed into the shell history. For each one it tells
 you where it is, what it unlocks, whether it expires, and what to do about it. It
-never prints a secret: every entry shows the first 8 hex characters of the secret's
-SHA-256 instead.
+**never prints a secret** — every entry shows the first 8 hex characters of the
+secret's SHA-256 instead — and it **never touches the network**.
 
 It is the companion to [preflight](https://github.com/howardhsieh/preflight). preflight
 asks *"will this repository run code on my machine?"*; blastradius asks *"and if it
@@ -16,45 +25,10 @@ whose payload ran TruffleHog over the victim's home directory, read `~/.npmrc`,
 `GITHUB_TOKEN`, AWS/GCP/Azure credentials and `.env` files, then used the npm token it
 found to publish itself into the victim's own packages.
 
-```console
-$ blastradius scan --dir ~/src
-
-  CRITICAL   laptop   exposure 100/100   52 credentials across 18 services   offline scan
-
- [CRITICAL] aws  ~/.aws/credentials:1
-            Long-term IAM access key (AKIA…) in profile "default", modified 16 months ago
-            → profile default  ·  sha256:4b312369  ·  long-term  ·  500 days old
-              an IAM user key works from anywhere, needs no MFA from the CLI, and stays valid until rotated
-              source credential for role profiles: admin
-
- [CRITICAL] npm  ~/.npmrc:1
-            Legacy npm token for registry.npmjs.org: never expires and is not covered by 2FA
-            → registry.npmjs.org  ·  sha256:0bed0453  ·  long-term  ·  400 days old
-
- [HIGH]     github  ~/.config/gh/hosts.yml:3
-            GitHub OAuth token for alice on github.com
-            → alice@github.com  ·  sha256:b067392d  ·  long-term
-              the same secret is stored in 2 other place(s)
-              gh auth login grants repo, read:org, gist and workflow by default: full read/write on every repository you can push to
-              also in ~/.git-credentials:1
-              also in env:GH_TOKEN
-
- [HIGH]     ssh  ~/.ssh/id_ed25519
-            ssh-ed25519 private key with NO passphrase: copying the file is enough to use it
-            → alice@laptop  ·  sha256:0c2f8c1e  ·  long-term  ·  800 days old
-              default identity: offered to every host without an explicit IdentityFile
- ...
- Do first:
-  1. [CRITICAL] Rotate the long-term AWS access key and move the profile to short-lived credentials
-     aws-1, aws-9
-  2. [CRITICAL] Revoke the legacy npm token today
-     npm-4
-  3. [HIGH] Narrow the GitHub token: fine-grained PAT with an expiry, or re-login to gh with fewer scopes
-     github-15, github-16
-```
-
-(The output above comes from the test fixture: every "secret" in it is the string
-`FAKEBLAST` repeated.)
+> The scan in the GIF above runs against a throwaway fake home directory
+> (`docs/demo/make-demo-home.sh`); every "secret" in it is inert filler and the AWS
+> key is Amazon's published non-functional example. Your real scan reads your real
+> `$HOME`, and the report still shows only SHA-256 fingerprints.
 
 ## Threat model
 
@@ -114,12 +88,12 @@ Run `blastradius providers` for the list. Each credential carries:
 
 ### Rating
 
-| Rating | Meaning |
-|---|---|
-| `CRITICAL` | a long-term cloud key, service-account key, live payment key or legacy npm token is on disk |
-| `HIGH` | long-lived tokens that give write access to source, packages or infrastructure sit in plaintext |
-| `MODERATE` | what was found is short-lived, narrowly scoped or project-local |
-| `LOW` | nothing long-lived in plaintext in the well-known locations |
+| | Rating | Meaning |
+|---|---|---|
+| 🟥 | `CRITICAL` | a long-term cloud key, service-account key, live payment key or legacy npm token is on disk |
+| 🟧 | `HIGH` | long-lived tokens that give write access to source, packages or infrastructure sit in plaintext |
+| 🟨 | `MODERATE` | what was found is short-lived, narrowly scoped or project-local |
+| 🟩 | `LOW` | nothing long-lived in plaintext in the well-known locations |
 
 The rating follows the worst credential; the 0–100 *exposure* score adds everything up.
 Expired credentials do not count. The **Do first** list groups credentials by the fix
@@ -225,6 +199,11 @@ All fixtures are generated at test time into a temporary directory by
 `internal/testfixture`; every secret in them contains the marker `FAKEBLAST` and none
 of them is valid anywhere. CI runs the suite on Linux, macOS and Windows and smoke-tests
 the binary against an empty home directory, never against the runner's own.
+
+Re-record the demo GIF with `docs/demo/record.sh` (needs [vhs](https://github.com/charmbracelet/vhs)).
+It builds the binary, generates an inert fake home with `docs/demo/make-demo-home.sh`,
+points `HOME` at it, and scans with `--no-env`, so the recording never reads your real
+credentials.
 
 ## License
 
