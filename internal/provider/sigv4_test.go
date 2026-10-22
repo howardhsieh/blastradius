@@ -11,7 +11,9 @@ import (
 // The example key pair from the AWS documentation. It is not a working
 // credential (every AWS document uses it); the test vectors below are the
 // published ones plus signatures generated with botocore for the exact
-// request blastradius sends.
+// request blastradius sends. The session-key case uses a deliberately
+// short key ID: the ID is not part of the signature, and a 20-character
+// ASIA… string trips GitHub secret scanning even for the documented example.
 const (
 	exampleKeyID  = "AKIAIOSFODNN7EXAMPLE"
 	exampleSecret = "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY"
@@ -50,7 +52,7 @@ func TestGetCallerIdentitySignature(t *testing.T) {
 	}{
 		{"long-term", exampleKeyID, "", "content-type;host;x-amz-content-sha256;x-amz-date",
 			"6382ceea3780ebc88ef45808bd3a4d064cfe39cc7dc7ea8973d77f4bfb6dfc1d"},
-		{"session", "ASIAIOSFODNN7EXAMPLE", "FQoGZXIvYXdzEBYaDExampleSessionToken", "content-type;host;x-amz-content-sha256;x-amz-date;x-amz-security-token",
+		{"session", "ASIAEXAMPLE", "FQoGZXIvYXdzEBYaDExampleSessionToken", "content-type;host;x-amz-content-sha256;x-amz-date;x-amz-security-token",
 			"00fbf3537b8e2cb19afa7a44b26d34cd263692587a733ff8a151e4f485b0e2e9"},
 	} {
 		req, body := stsRequest(t)
