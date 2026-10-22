@@ -38,6 +38,21 @@ func source(src string) func(cred.Credential) bool {
 }
 
 var adviceRules = []adviceRule{
+	// Reach-based rules come first: a probe answer is more specific than
+	// the credential's shape.
+	{"revoked", func(c cred.Credential) bool { return probed(c, func(r *cred.Reach) bool { return !r.Live }) },
+		"Delete credentials the service no longer accepts",
+		"The probe got a 401 for these. They cannot be used, but they clutter the machine and hide live ones; remove the file or line. If you did not revoke them yourself, treat the account as having been through a rotation and check its audit log."},
+	{"aws-root", func(c cred.Credential) bool {
+		return c.Service == cred.ServiceAWS && probed(c, func(r *cred.Reach) bool { return r.Admin })
+	},
+		"Delete the ROOT access key now and lock the root user behind hardware MFA",
+		"sts:GetCallerIdentity says this key is the account root user: no IAM policy limits it, it can close the account and delete every backup. In the console as root: Security credentials → Access keys → Deactivate, then Delete; enable a hardware MFA device; create an IAM Identity Center or IAM user for daily work. Review CloudTrail for the key's history."},
+	{"npm-automation", func(c cred.Credential) bool {
+		return c.Service == cred.ServiceNPM && probed(c, func(r *cred.Reach) bool { return r.Bypass2FA })
+	},
+		"Revoke the npm automation token: it publishes without 2FA",
+		"An automation token is meant for CI, not a laptop; whoever copies it can publish to every package you own with no second factor, which is exactly how Shai-Hulud spread. Revoke it at npmjs.com → Access Tokens, publish from CI with trusted publishing (OIDC), and keep only a read-only or granular token locally."},
 	{"aws-long-term", is(cred.ServiceAWS, "access-key"),
 		"Rotate the long-term AWS access key and move the profile to short-lived credentials",
 		"Create a new key only if you must, then delete the old one in IAM. Better: `aws configure sso` (IAM Identity Center) or `aws sts assume-role` behind MFA, so what sits on disk expires within hours."},

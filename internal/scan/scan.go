@@ -28,6 +28,16 @@ type Options struct {
 	SkipEnv bool
 	// Providers restricts the scan to these provider IDs (empty = all).
 	Providers []string
+	// Probe asks each service what the credentials found can do. Off by
+	// default; see PlanProbe and RunProbe.
+	Probe bool
+	// ProbeHosts are GitHub Enterprise hosts allowed with --probe-host.
+	ProbeHosts []string
+	// ProbeClusters are kubeconfig cluster names allowed with --probe-cluster.
+	ProbeClusters []string
+	// ProbeTimeout bounds the whole probe phase (default 60s); each single
+	// probe is bounded by provider.DefaultProbeTimeout.
+	ProbeTimeout time.Duration
 }
 
 // Advice is one remediation step, covering one or more credentials.
@@ -41,18 +51,20 @@ type Advice struct {
 
 // Result is the outcome of scanning one machine.
 type Result struct {
-	Host        string                `json:"host"`
-	ScannedAt   string                `json:"scanned_at"`
-	Rating      string                `json:"rating"`
-	Score       int                   `json:"score"`
-	Summary     map[string]int        `json:"summary"`
-	Services    []string              `json:"services"`
-	Credentials []cred.Credential     `json:"credentials"`
-	Remediation []Advice              `json:"remediation"`
-	Problems    []provider.Problem    `json:"problems,omitempty"`
-	Providers   []string              `json:"providers_run"`
-	Dirs        []string              `json:"dirs_searched,omitempty"`
-	Offline     bool                  `json:"offline"`
+	Host        string             `json:"host"`
+	ScannedAt   string             `json:"scanned_at"`
+	Rating      string             `json:"rating"`
+	Score       int                `json:"score"`
+	Summary     map[string]int     `json:"summary"`
+	Services    []string           `json:"services"`
+	Credentials []cred.Credential  `json:"credentials"`
+	Remediation []Advice           `json:"remediation"`
+	Problems    []provider.Problem `json:"problems,omitempty"`
+	Providers   []string           `json:"providers_run"`
+	Dirs        []string           `json:"dirs_searched,omitempty"`
+	Offline     bool               `json:"offline"`
+	// ProbedHosts lists the hosts --probe contacted, when it ran.
+	ProbedHosts []string              `json:"probed_hosts,omitempty"`
 	counts      map[cred.Severity]int `json:"-"`
 }
 
@@ -96,21 +108,31 @@ func Run(env *provider.Env, opt Options) (*Result, error) {
 		all = []cred.Credential{}
 	}
 	res.Credentials = all
-	res.Summary = map[string]int{}
-	res.counts = map[cred.Severity]int{}
+	res.rate()
+	return res, nil
+}
+
+// rate recomputes everything derived from the credential list: advice per
+// row, summary counts, services, score, rating and the Do-first list.
+// RunProbe calls it again once reach has refined severities.
+func (r *Result) rate() {
+	r.Summary = map[string]int{}
+	r.counts = map[cred.Severity]int{}
+	r.Services = nil
 	services := map[string]bool{}
-	for _, c := range all {
-		res.Summary[c.Severity.String()]++
-		res.counts[c.Severity]++
+	for i := range r.Credentials {
+		c := &r.Credentials[i]
+		c.Remediation = remediationFor(*c)
+		r.Summary[c.Severity.String()]++
+		r.counts[c.Severity]++
 		services[c.Service] = true
 	}
 	for s := range services {
-		res.Services = append(res.Services, s)
+		r.Services = append(r.Services, s)
 	}
-	sort.Strings(res.Services)
-	res.Score, res.Rating = Rate(all)
-	res.Remediation = advise(all)
-	return res, nil
+	sort.Strings(r.Services)
+	r.Score, r.Rating = Rate(r.Credentials)
+	r.Remediation = advise(r.Credentials)
 }
 
 // Counts returns how many credentials have each severity.

@@ -3,13 +3,16 @@
 package main
 
 import (
+	"context"
 	"errors"
 	"flag"
 	"fmt"
 	"io"
+	"net/http"
 	"os"
 	"runtime/debug"
 	"strings"
+	"time"
 
 	"github.com/howardhsieh/blastradius/internal/cred"
 	"github.com/howardhsieh/blastradius/internal/provider"
@@ -34,7 +37,8 @@ const usage = `blastradius — what could an attacker reach from this machine?
 
 Usage:
   blastradius scan [flags]      Inventory the credentials on this machine (offline)
-  blastradius providers         List providers and the files each one reads
+  blastradius providers         List providers, the files each one reads and
+                                the API hosts --probe may contact
   blastradius version           Print the version
 
 Flags (scan):
@@ -52,8 +56,21 @@ Flags (scan):
   -v, --verbose                 Print the full remediation text
       --no-color                Disable colored output
 
-The scan never contacts the network and never prints a secret; every entry
-shows the first 8 hex characters of the SHA-256 of the secret instead.
+Flags (scan --probe, opt-in network lookups):
+      --probe                   After the offline scan, ask each service what the
+                                credentials found can actually do (identity, scopes,
+                                token type) and refine the severities. The hosts
+                                that will be contacted are printed first.
+      --probe-host HOST         Also probe a GitHub Enterprise host from hosts.yml;
+                                repeatable
+      --probe-cluster NAME      Also probe this kubeconfig cluster (its API server
+                                is not on the fixed allow-list); repeatable
+      --probe-timeout DURATION  Bound for the whole probe phase (default 60s)
+
+Without --probe the scan never contacts the network. With it, each secret is
+sent only to its own service's official API host, over HTTPS, and only the
+service's answer (who you are, what you may do) is kept. Nothing ever prints
+a secret; every entry shows the first 8 hex characters of its SHA-256 instead.
 
 Exit codes: 0 ok, 1 rating at or above --fail-on, 2 error.
 `
@@ -73,6 +90,9 @@ func run(args []string, stdout, stderr io.Writer) int {
 	case "providers":
 		for _, p := range provider.All() {
 			fmt.Fprintf(stdout, "%-16s %s\n", p.ID(), p.Describe())
+			if pr, ok := p.(provider.Prober); ok {
+				fmt.Fprintf(stdout, "%-16s %s\n", "", "probe: "+probeHostsLine(pr))
+			}
 		}
 		return 0
 	case "version", "--version", "-v":
@@ -84,6 +104,23 @@ func run(args []string, stdout, stderr io.Writer) int {
 	}
 	fmt.Fprintf(stderr, "blastradius: unknown command %q\n\n%s", args[0], usage)
 	return 2
+}
+
+// probeTransport lets tests stand in for the real APIs. There is no flag or
+// environment variable that sets it: a probe can only ever reach the hosts
+// the probers declare.
+var probeTransport func(http.RoundTripper) http.RoundTripper
+
+// probeHostsLine renders a prober's allow-list for `providers`.
+func probeHostsLine(p provider.Prober) string {
+	hosts := p.ProbeHosts()
+	switch p.ID() {
+	case "github":
+		return strings.Join(hosts, ", ") + " (GitHub Enterprise hosts only with --probe-host)"
+	case "kubernetes":
+		return "no fixed host; each cluster's API server only with --probe-cluster NAME"
+	}
+	return strings.Join(hosts, ", ")
 }
 
 type listFlag []string
@@ -105,6 +142,8 @@ func cmdScan(args []string, stdout, stderr io.Writer) int {
 		format, output, failOn, minSev, home string
 		noColor, noEnv, verbose, probe       bool
 		dirs, providers                      listFlag
+		probeHosts, probeClusters            listFlag
+		probeTimeout                         time.Duration
 	)
 	fs.StringVar(&format, "format", "table", "")
 	fs.StringVar(&format, "f", "table", "")
@@ -120,6 +159,9 @@ func cmdScan(args []string, stdout, stderr io.Writer) int {
 	fs.BoolVar(&probe, "probe", false, "")
 	fs.Var(&dirs, "dir", "")
 	fs.Var(&providers, "provider", "")
+	fs.Var(&probeHosts, "probe-host", "")
+	fs.Var(&probeClusters, "probe-cluster", "")
+	fs.DurationVar(&probeTimeout, "probe-timeout", scan.DefaultProbeTimeout, "")
 	if err := fs.Parse(args); err != nil {
 		fmt.Fprintf(stderr, "blastradius: %v\n\n%s", err, usage)
 		return 2
@@ -128,8 +170,12 @@ func cmdScan(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintf(stderr, "blastradius: scan takes no positional arguments (did you mean --dir %s?)\n", fs.Arg(0))
 		return 2
 	}
-	if probe {
-		fmt.Fprintln(stderr, "blastradius: --probe (online permission lookups) is not implemented in this version; the scan is offline")
+	if !probe && (len(probeHosts) > 0 || len(probeClusters) > 0) {
+		fmt.Fprintln(stderr, "blastradius: --probe-host and --probe-cluster only make sense together with --probe")
+		return 2
+	}
+	if probeTimeout <= 0 {
+		fmt.Fprintln(stderr, "blastradius: --probe-timeout must be positive")
 		return 2
 	}
 	if format != "table" && format != "json" {
@@ -167,10 +213,18 @@ func cmdScan(args []string, stdout, stderr io.Writer) int {
 	if home != "" {
 		env.Home = home
 	}
-	res, err := scan.Run(env, scan.Options{Dirs: dirs, SkipEnv: noEnv, Providers: providers})
+	opt := scan.Options{Dirs: dirs, SkipEnv: noEnv, Providers: providers,
+		Probe: probe, ProbeHosts: probeHosts, ProbeClusters: probeClusters, ProbeTimeout: probeTimeout}
+	res, err := scan.Run(env, opt)
 	if err != nil {
 		fmt.Fprintln(stderr, "blastradius:", err)
 		return 2
+	}
+	if probe {
+		env.Probe = &provider.ProbeConfig{UserAgent: "blastradius/" + version, Transport: probeTransport}
+		plan := scan.PlanProbe(env, res, opt)
+		printConsent(stderr, plan)
+		scan.RunProbe(context.Background(), env, res, plan, opt)
 	}
 
 	out := stdout
@@ -198,6 +252,30 @@ func cmdScan(args []string, stdout, stderr io.Writer) int {
 		return 1
 	}
 	return 0
+}
+
+// printConsent tells the user exactly what --probe is about to contact,
+// before the first request leaves the machine.
+func printConsent(w io.Writer, plan *scan.ProbePlan) {
+	if plan.Credentials() == 0 {
+		fmt.Fprintln(w, "blastradius: --probe: nothing to probe, no request will be made")
+	} else {
+		n := plan.Credentials()
+		fmt.Fprintf(w, "blastradius: --probe will send %d credential%s to the following hosts over HTTPS and keep only the answer:\n", n, plural(n))
+		for _, t := range plan.Targets {
+			fmt.Fprintf(w, "  %-28s %d %s credential%s\n", t.Host, t.Count, t.Service, plural(t.Count))
+		}
+	}
+	for _, s := range plan.Skipped {
+		fmt.Fprintf(w, "  not probed: %s\n", s)
+	}
+}
+
+func plural(n int) string {
+	if n == 1 {
+		return ""
+	}
+	return "s"
 }
 
 func isTerminal(w io.Writer) bool {

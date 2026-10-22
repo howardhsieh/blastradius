@@ -116,8 +116,8 @@ func NewFixture(t *testing.T) *Fixture {
 	f.Secrets = append(f.Secrets, "FAKEBLASTdockerpw")
 	f.write(t, ".docker/config.json", `{"auths":{"https://index.docker.io/v1/":{"auth":"`+dockerAuth+`"},"ghcr.io":{}},"credsStore":"osxkeychain"}`, 0o600, 0)
 
-	certPEM, keyPEM := selfSigned(t, "kube-admin", f.Now.Add(365*day))
-	expiredPEM, expiredKey := selfSigned(t, "old-admin", f.Now.Add(-day))
+	certPEM, keyPEM := SelfSigned(t, "kube-admin", f.Now.Add(365*day))
+	expiredPEM, expiredKey := SelfSigned(t, "old-admin", f.Now.Add(-day))
 	kubeTok := f.secret(pad("eyJhbGciOiJSUzI1NiIsImtpZCI6IkZBS0UifQ.eyJzdWIiOiJGQUtFQkxBU1QifQ.", 120))
 	f.Secrets = append(f.Secrets, keyPEM, expiredKey)
 	f.write(t, ".kube/config", `apiVersion: v1
@@ -263,8 +263,8 @@ func OpenSSHKey(keyType string, encrypted bool) string {
 	return "-----BEGIN OPENSSH PRIVATE KEY-----\n" + strings.Join(lines, "\n") + "\n-----END OPENSSH PRIVATE KEY-----\n"
 }
 
-// selfSigned returns a throw-away certificate and key in PEM.
-func selfSigned(t *testing.T, cn string, notAfter time.Time) (certPEM, keyPEM string) {
+// SelfSigned returns a throw-away certificate and key in PEM.
+func SelfSigned(t *testing.T, cn string, notAfter time.Time) (certPEM, keyPEM string) {
 	t.Helper()
 	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	if err != nil {
