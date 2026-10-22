@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"fmt"
 	"strings"
 	"testing"
 
@@ -94,6 +95,10 @@ func assertNoSecret(t *testing.T, f *testfixture.Fixture, res *scan.Result) {
 	if err := JSON(&js, res, "test"); err != nil {
 		t.Fatal(err)
 	}
+	var sarif bytes.Buffer
+	if err := SARIF(&sarif, res, "test"); err != nil {
+		t.Fatal(err)
+	}
 	// Reach fields are part of the contract too: dump them on their own so a
 	// leak there is attributed to probing.
 	var reach bytes.Buffer
@@ -110,7 +115,7 @@ func assertNoSecret(t *testing.T, f *testfixture.Fixture, res *scan.Result) {
 	if len(f.Secrets) < 40 {
 		t.Fatalf("fixture only has %d secrets; the leak test needs the full set", len(f.Secrets))
 	}
-	for name, out := range map[string]string{"table": table.String(), "verbose": verbose.String(), "json": js.String(), "reach": reach.String()} {
+	for name, out := range map[string]string{"table": table.String(), "verbose": verbose.String(), "json": js.String(), "sarif": sarif.String(), "reach": reach.String()} {
 		if strings.Contains(out, testfixture.Marker) {
 			t.Errorf("%s output contains the fixture marker:\n%s", name, out)
 		}
@@ -220,6 +225,123 @@ func TestJSONWithReach(t *testing.T) {
 		if strings.Contains(strings.ToLower(buf.String()), bad) {
 			t.Errorf("json has a %s field", bad)
 		}
+	}
+}
+
+func TestSARIF(t *testing.T) {
+	for _, probed := range []bool{false, true} {
+		var res *scan.Result
+		if probed {
+			_, res = probedScan(t, false)
+		} else {
+			_, res = fullScan(t)
+		}
+		var buf bytes.Buffer
+		if err := SARIF(&buf, res, "1.2.3"); err != nil {
+			t.Fatal(err)
+		}
+		var doc struct {
+			Schema  string `json:"$schema"`
+			Version string `json:"version"`
+			Runs    []struct {
+				Tool struct {
+					Driver struct {
+						Name    string `json:"name"`
+						Version string `json:"version"`
+						Rules   []struct {
+							ID               string `json:"id"`
+							ShortDescription struct {
+								Text string `json:"text"`
+							} `json:"shortDescription"`
+						} `json:"rules"`
+					} `json:"driver"`
+				} `json:"tool"`
+				Results []struct {
+					RuleID    string `json:"ruleId"`
+					Level     string `json:"level"`
+					Message   struct{ Text string }
+					Locations []struct {
+						PhysicalLocation struct {
+							ArtifactLocation struct{ URI string }
+							Region           *struct{ StartLine int }
+						} `json:"physicalLocation"`
+					} `json:"locations"`
+					Properties          map[string]string `json:"properties"`
+					PartialFingerprints map[string]string `json:"partialFingerprints"`
+				} `json:"results"`
+				Properties map[string]string `json:"properties"`
+			} `json:"runs"`
+		}
+		if err := json.Unmarshal(buf.Bytes(), &doc); err != nil {
+			t.Fatal(err)
+		}
+		if doc.Version != "2.1.0" || !strings.Contains(doc.Schema, "sarif-2.1.0") || len(doc.Runs) != 1 {
+			t.Fatalf("sarif envelope = %+v", doc)
+		}
+		run := doc.Runs[0]
+		if run.Tool.Driver.Name != "blastradius" || run.Tool.Driver.Version != "1.2.3" || len(run.Tool.Driver.Rules) < 20 {
+			t.Errorf("driver = %+v", run.Tool.Driver)
+		}
+		if run.Properties["rating"] != "CRITICAL" || run.Properties["host"] != "testbox" || run.Properties["offline"] != fmt.Sprint(!probed) {
+			t.Errorf("run properties = %v", run.Properties)
+		}
+		if len(run.Results) != len(res.Credentials) {
+			t.Fatalf("%d results for %d credentials", len(run.Results), len(res.Credentials))
+		}
+		ruleIDs := map[string]bool{}
+		for _, r := range run.Tool.Driver.Rules {
+			ruleIDs[r.ID] = true
+		}
+		levels := map[string]int{}
+		for i, r := range run.Results {
+			c := res.Credentials[i]
+			if !ruleIDs[r.RuleID] {
+				t.Errorf("result %d uses undeclared rule %q", i, r.RuleID)
+			}
+			levels[r.Level]++
+			if len(r.Locations) != 1 || r.Locations[0].PhysicalLocation.ArtifactLocation.URI == "" {
+				t.Errorf("result %d has no location: %+v", i, r)
+			}
+			if c.Line > 0 && (r.Locations[0].PhysicalLocation.Region == nil || r.Locations[0].PhysicalLocation.Region.StartLine != c.Line) {
+				t.Errorf("result %d line = %+v, want %d", i, r.Locations[0].PhysicalLocation.Region, c.Line)
+			}
+			if r.Properties["service"] != c.Service || r.Properties["severity"] != c.Severity.String() {
+				t.Errorf("result %d properties = %v", i, r.Properties)
+			}
+			if c.Fingerprint != "" && r.PartialFingerprints["secretSha256Prefix/v1"] != c.Fingerprint {
+				t.Errorf("result %d fingerprint = %v", i, r.PartialFingerprints)
+			}
+			if c.Reach != nil && (r.Properties["probe_host"] == "" || !strings.Contains(r.Message.Text, "probe:")) {
+				t.Errorf("result %d lost its reach: %+v", i, r)
+			}
+			if !strings.Contains(r.Message.Text, strings.ToUpper(c.Severity.String())) {
+				t.Errorf("result %d message = %q", i, r.Message.Text)
+			}
+		}
+		if levels["error"] == 0 || levels["warning"] == 0 || levels["note"] == 0 {
+			t.Errorf("levels = %v", levels)
+		}
+		if probed && run.Properties["probed_hosts"] == "" {
+			t.Errorf("probed run has no probed_hosts: %v", run.Properties)
+		}
+		// Environment variables are env: URIs, files keep the ~/ form.
+		var envSeen, fileSeen bool
+		for _, r := range run.Results {
+			uri := r.Locations[0].PhysicalLocation.ArtifactLocation.URI
+			if strings.HasPrefix(uri, "env:") {
+				envSeen = true
+			}
+			if strings.HasPrefix(uri, "~/") {
+				fileSeen = true
+			}
+		}
+		if !envSeen || !fileSeen {
+			t.Errorf("uris: env %v file %v", envSeen, fileSeen)
+		}
+	}
+	// The inventory rule covers rows that need no action.
+	if scan.RuleFor(cred.Credential{Severity: cred.Info}).ID != scan.InventoryRule.ID {
+		t.Error("info credential should map to the inventory rule")
 	}
 }
 
