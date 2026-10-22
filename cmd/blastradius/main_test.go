@@ -32,6 +32,16 @@ func TestCLI(t *testing.T) {
 	if err := json.Unmarshal([]byte(out), &doc); err != nil || doc["rating"] != "CRITICAL" {
 		t.Errorf("json output: %v %v", err, doc["rating"])
 	}
+	code, out, _ = run("-f", "sarif")
+	var sarif struct {
+		Version string `json:"version"`
+		Runs    []struct {
+			Results []map[string]any `json:"results"`
+		} `json:"runs"`
+	}
+	if code != 0 || json.Unmarshal([]byte(out), &sarif) != nil || sarif.Version != "2.1.0" || len(sarif.Runs) != 1 || len(sarif.Runs[0].Results) == 0 || strings.Contains(out, testfixture.Marker) {
+		t.Errorf("sarif output: code %d\n%.300s", code, out)
+	}
 	if code, _, _ = run("--provider", "ssh", "--fail-on", "critical"); code != 0 {
 		t.Errorf("ssh only should not be critical: %d", code)
 	}

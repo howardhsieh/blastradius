@@ -135,6 +135,43 @@ var adviceRules = []adviceRule{
 		"Any secret readable as a plain file is one `cat` away for malware running as you. Prefer the tool's own keychain-backed store, short-lived credentials, or hardware-backed keys."},
 }
 
+// Rule is one remediation rule as seen from outside the package: the SARIF
+// reporter publishes the list as the tool's rules and tags every finding
+// with the one that matched.
+type Rule struct {
+	ID     string `json:"id"`
+	Title  string `json:"title"`
+	Detail string `json:"detail"`
+}
+
+// InventoryRule is the rule attached to credentials that need no
+// remediation (expired, informational, already protected) so that every
+// row still appears in a SARIF log.
+var InventoryRule = Rule{ID: "inventory", Title: "Credential inventoried, no action needed",
+	Detail: "The credential is expired, informational or already protected (for example a passphrase-protected SSH key); it is listed so the inventory is complete."}
+
+// Rules returns every remediation rule in matching order, plus InventoryRule.
+func Rules() []Rule {
+	out := make([]Rule, 0, len(adviceRules)+1)
+	for _, r := range adviceRules {
+		out = append(out, Rule{ID: r.key, Title: r.title, Detail: r.detail})
+	}
+	return append(out, InventoryRule)
+}
+
+// RuleFor returns the rule that matched a credential.
+func RuleFor(c cred.Credential) Rule {
+	if !needsAdvice(c) {
+		return InventoryRule
+	}
+	for _, r := range adviceRules {
+		if r.match(c) {
+			return Rule{ID: r.key, Title: r.title, Detail: r.detail}
+		}
+	}
+	return InventoryRule
+}
+
 // remediationFor returns the one-line advice title for a credential.
 func remediationFor(c cred.Credential) string {
 	if !needsAdvice(c) {

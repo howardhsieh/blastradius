@@ -42,7 +42,7 @@ Usage:
   blastradius version           Print the version
 
 Flags (scan):
-  -f, --format table|json       Output format (default table)
+  -f, --format table|json|sarif Output format (default table)
   -o, --output FILE             Write the report to FILE instead of stdout
       --dir PATH                Also search PATH for .env files and project .npmrc;
                                 repeatable or comma-separated
@@ -178,7 +178,7 @@ func cmdScan(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintln(stderr, "blastradius: --probe-timeout must be positive")
 		return 2
 	}
-	if format != "table" && format != "json" {
+	if format != "table" && format != "json" && format != "sarif" {
 		fmt.Fprintf(stderr, "blastradius: unknown format %q\n", format)
 		return 2
 	}
@@ -240,6 +240,8 @@ func cmdScan(args []string, stdout, stderr io.Writer) int {
 	switch format {
 	case "json":
 		err = report.JSON(out, res, version)
+	case "sarif":
+		err = report.SARIF(out, res, version)
 	default:
 		color := !noColor && output == "" && os.Getenv("NO_COLOR") == "" && isTerminal(stdout)
 		err = report.Table(out, res, report.TableOptions{Color: color, MinSeverity: showSev, Verbose: verbose})
