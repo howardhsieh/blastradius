@@ -116,6 +116,9 @@ type Credential struct {
 	Summary     string   `json:"summary"`
 	Notes       []string `json:"notes,omitempty"`
 	Remediation string   `json:"remediation,omitempty"`
+	// Reach is filled only by --probe: what the service said the credential
+	// can do. Nil for an offline scan.
+	Reach *Reach `json:"reach,omitempty"`
 }
 
 // Fingerprint returns the first 8 hex characters of SHA-256(secret), or

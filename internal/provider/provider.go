@@ -28,6 +28,9 @@ type Env struct {
 	Environ  func() []string
 	// Dirs are project directories to search for .env files and .npmrc.
 	Dirs []string
+	// Probe configures the optional network probes. Nil means offline; the
+	// scanner only sets it when the user passed --probe.
+	Probe *ProbeConfig
 }
 
 // Default returns an Env for the current user.
@@ -43,6 +46,17 @@ func Default() (*Env, error) {
 // Path joins parts under the home directory.
 func (e *Env) Path(parts ...string) string {
 	return filepath.Join(append([]string{e.Home}, parts...)...)
+}
+
+// Expand reverses Display: "~/x" becomes an absolute path under Home.
+func (e *Env) Expand(p string) string {
+	if p == "~" {
+		return e.Home
+	}
+	if rest, ok := strings.CutPrefix(p, "~/"); ok {
+		return e.Path(filepath.FromSlash(rest))
+	}
+	return p
 }
 
 // Display shortens a path under the home directory to "~/...".
@@ -81,12 +95,10 @@ type Provider interface {
 	Collect(env *Env) ([]cred.Credential, []Problem)
 }
 
-// Reach is what a probe learned a credential can do.
-type Reach struct {
-	Identity string   `json:"identity,omitempty"`
-	Scopes   []string `json:"scopes,omitempty"`
-	Summary  string   `json:"summary"`
-}
+// Reach is what a probe learned a credential can do. It lives in package
+// cred so a Credential can carry it; the alias keeps the Prober interface
+// readable.
+type Reach = cred.Reach
 
 // Prober is implemented by providers that can ask the service what a
 // credential is allowed to do. Not used by `scan` without --probe.
@@ -96,7 +108,10 @@ type Prober interface {
 	ProbeHosts() []string
 	// Probe checks one credential against the service. It receives the
 	// credential's location so it can re-read the secret itself; the
-	// Credential record never carries it.
+	// Credential record never carries it. Implementations send the secret
+	// only to hosts in ProbeHosts (or, for GitHub Enterprise and
+	// Kubernetes, hosts the user named explicitly), and never put it in the
+	// Reach, the error or a log line.
 	Probe(ctx context.Context, env *Env, c cred.Credential) (*Reach, error)
 }
 

@@ -58,9 +58,19 @@ func Table(w io.Writer, r *scan.Result, opt TableOptions) error {
 		return code + s + reset
 	}
 	n := len(r.Credentials)
+	mode := "offline scan"
+	if !r.Offline {
+		probed := 0
+		for _, c := range r.Credentials {
+			if c.Reach != nil {
+				probed++
+			}
+		}
+		mode = fmt.Sprintf("probed %d credential%s against %d host%s", probed, plural(probed), len(r.ProbedHosts), plural(len(r.ProbedHosts)))
+	}
 	fmt.Fprintf(w, "\n %s  %s   exposure %d/100   %d credential%s across %d service%s   %s\n\n",
 		paint(ratingColor[r.Rating], " "+r.Rating+" "), paint(bold, r.Host), r.Score,
-		n, plural(n), len(r.Services), plural(len(r.Services)), paint(dim, "offline scan"))
+		n, plural(n), len(r.Services), plural(len(r.Services)), paint(dim, mode))
 
 	shown := 0
 	for _, c := range r.Credentials {
@@ -95,6 +105,13 @@ func Table(w io.Writer, r *scan.Result, opt TableOptions) error {
 		}
 		if len(attrs) > 0 {
 			fmt.Fprintf(w, "            %s\n", paint(dim, "→ "+strings.Join(attrs, "  ·  ")))
+		}
+		if c.Reach != nil {
+			code := sevColor[c.Severity]
+			if !c.Reach.Live {
+				code = dim
+			}
+			fmt.Fprintf(w, "            %s\n", paint(code, "↳ "+reachLine(c.Reach)))
 		}
 		for _, note := range c.Notes {
 			fmt.Fprintf(w, "            %s\n", paint(dim, "  "+note))
@@ -131,13 +148,30 @@ func Table(w io.Writer, r *scan.Result, opt TableOptions) error {
 		}
 	}
 	if len(r.Problems) > 0 {
-		fmt.Fprintf(w, "\n %s\n", paint(dim, "Not read:"))
+		heading := "Not read:"
+		if !r.Offline {
+			heading = "Not read or not probed:"
+		}
+		fmt.Fprintf(w, "\n %s\n", paint(dim, heading))
 		for _, p := range r.Problems {
 			fmt.Fprintf(w, "  %s\n", paint(dim, p.Location+": "+p.Err))
 		}
 	}
 	_, err := fmt.Fprintln(w)
 	return err
+}
+
+// reachLine renders what the probe learned: "acts as alice · scopes: repo,
+// read:org · probed 2026-10-22T12:00:00Z".
+func reachLine(r *cred.Reach) string {
+	s := r.Summary
+	if s == "" {
+		s = "acts as " + r.Identity
+	}
+	if r.Host != "" {
+		s += " · " + r.Host
+	}
+	return s + " · probed " + r.ProbedAt
 }
 
 func plural(n int) string {
