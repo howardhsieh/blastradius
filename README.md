@@ -140,6 +140,7 @@ The tool has **zero third-party dependencies**; it uses only the Go standard lib
 blastradius scan                          # home directory + environment
 blastradius scan --dir ~/src              # also .env files and project .npmrc under ~/src
 blastradius scan -f json -o report.json   # machine-readable, mode 0600
+blastradius scan -f sarif -o blastradius.sarif  # one result per credential, for code scanning / dashboards
 blastradius scan --provider ssh,aws       # a subset of providers
 blastradius scan --fail-on high           # exit 1 for a pre-commit or CI self-check
 blastradius scan --probe                  # also ask GitHub, npm, AWS, Anthropic, OpenAI what each token can do
@@ -148,7 +149,7 @@ blastradius scan --probe --probe-cluster prod   # ... and the kubeconfig cluster
 
 | Flag | Default | |
 |---|---|---|
-| `-f, --format` | `table` | `table` or `json` |
+| `-f, --format` | `table` | `table`, `json` or `sarif` (SARIF 2.1.0: one result per credential, one rule per remediation, the rating in the run properties) |
 | `-o, --output` | stdout | write the report to a file |
 | `--dir` | | search this directory for `.env*` and `.npmrc` (repeatable, comma-separated) |
 | `--provider` | all | run only these providers |
@@ -320,7 +321,14 @@ These are properties of the code, each pinned by a test:
   to the token.
 - `--probe` for `--provider` subsets and a `--probe-only` re-run that reuses a saved
   JSON report instead of rescanning.
-- SARIF output, so a self-check can land in GitHub code scanning like preflight's.
+- A GitHub Action that runs the SARIF self-check on a CI runner's home and uploads it
+  to code scanning, the way preflight's action does.
+
+## Further reading
+
+- [If a stealer ran here: how blastradius works](docs/writeup.md) — the attack, the
+  no-secret-in-the-record rule, how severities and advice are derived, and how `--probe`
+  is kept from becoming the exfiltration channel it warns about.
 
 ## Development
 
